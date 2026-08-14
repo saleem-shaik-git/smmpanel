@@ -1,0 +1,6 @@
+<?php
+
+declare(strict_types=1);
+require dirname(__DIR__,2).'/config/bootstrap.php';
+use App\Auth;use App\Database;use App\Services\PaymentService;use App\Services\PaystackService;
+$userId=Auth::requireLogin();if($_SERVER['REQUEST_METHOD']!=='POST'){http_response_code(405);exit('Method not allowed');}$amount=(float)($_POST['amount']??0);if($amount<100||$amount>100000000){http_response_code(422);exit('Invalid amount.');}$pdo=Database::connection();$s=$pdo->prepare('SELECT email FROM users WHERE id=:id AND status=\'active\'');$s->execute([':id'=>$userId]);$user=$s->fetch();if(!$user){http_response_code(403);exit('Account unavailable.');}$intent=(new PaymentService())->createIntent($userId,$amount,'paystack');$callback=(string)(getenv('APP_URL')?:'http://localhost').'/payments/callback.php';try{$paystack=new PaystackService((string)(getenv('PAYSTACK_SECRET_KEY')?:''));$data=$paystack->initialize($user['email'],$amount,$intent['reference'],$callback,['user_id'=>$userId]);header('Location: '.$data['authorization_url'],true,302);exit;}catch(Throwable $e){$pdo->prepare("UPDATE payment_intents SET status='failed',provider_raw=:raw WHERE reference=:ref")->execute([':raw'=>json_encode(['error'=>$e->getMessage()],JSON_UNESCAPED_SLASHES),':ref'=>$intent['reference']]);http_response_code(502);exit('Unable to initialize payment.');}
