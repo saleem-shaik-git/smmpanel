@@ -1,0 +1,7 @@
+.env
+/vendor/
+/storage/logs/*
+*.log
+.DS_Store
+.idea/
+.vscode/

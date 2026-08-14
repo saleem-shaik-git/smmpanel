@@ -1,0 +1,25 @@
+name: PHP QA
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, mbstring, json
+          coverage: none
+      - name: PHP syntax checks
+        shell: bash
+        run: |
+          set -e
+          find app public bin -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: PHPUnit
+        shell: bash
+        run: |
+          if [ -f vendor/bin/phpunit ]; then vendor/bin/phpunit; else echo 'PHPUnit not installed; syntax QA completed.'; fi
