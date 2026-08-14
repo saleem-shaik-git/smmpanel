@@ -1,72 +1,15 @@
 <?php
 
 declare(strict_types=1);
-
 namespace App\Services;
-
 use App\Database;
-use PDO;
 use RuntimeException;
-
 final class PaymentService
 {
-    public function creditWallet(int $userId, float $amount, string $reference, string $description = 'Wallet deposit'): int
-    {
-        if ($amount <= 0 || $amount > 100000000) {
-            throw new RuntimeException('Invalid deposit amount.');
-        }
-        $reference = trim($reference);
-        if ($reference === '' || strlen($reference) > 190) {
-            throw new RuntimeException('Invalid payment reference.');
-        }
-
-        $pdo = Database::connection();
-        $pdo->beginTransaction();
-        try {
-            $existing = $pdo->prepare('SELECT id FROM transactions WHERE reference = :reference LIMIT 1');
-            $existing->execute([':reference' => $reference]);
-            $transactionId = $existing->fetchColumn();
-            if ($transactionId !== false) {
-                $pdo->commit();
-                return (int) $transactionId;
-            }
-
-            $userStmt = $pdo->prepare('SELECT id, balance, status FROM users WHERE id = :id FOR UPDATE');
-            $userStmt->execute([':id' => $userId]);
-            $user = $userStmt->fetch(PDO::FETCH_ASSOC);
-            if (!$user || $user['status'] !== 'active') {
-                throw new RuntimeException('User account is not active.');
-            }
-
-            $before = (float) $user['balance'];
-            $after = $before + $amount;
-            $pdo->prepare('UPDATE users SET balance = :balance WHERE id = :id')
-                ->execute([':balance' => $after, ':id' => $userId]);
-
-            $stmt = $pdo->prepare(
-                "INSERT INTO transactions (user_id, type, amount, balance_before, balance_after, reference, description, status) " .
-                "VALUES (:user_id, 'deposit', :amount, :before, :after, :reference, :description, 'completed')"
-            );
-            $stmt->execute([
-                ':user_id' => $userId,
-                ':amount' => $amount,
-                ':before' => $before,
-                ':after' => $after,
-                ':reference' => $reference,
-                ':description' => mb_substr($description, 0, 255),
-            ]);
-            $id = (int) $pdo->lastInsertId();
-            $pdo->commit();
-            return $id;
-        } catch (\Throwable $e) {
-            if ($pdo->inTransaction()) $pdo->rollBack();
-            if ($e instanceof \PDOException && isset($e->errorInfo[1]) && (int)$e->errorInfo[1] === 1062) {
-                $check = $pdo->prepare('SELECT id FROM transactions WHERE reference = :reference LIMIT 1');
-                $check->execute([':reference' => $reference]);
-                $id = $check->fetchColumn();
-                if ($id !== false) return (int)$id;
-            }
-            throw $e;
-        }
-    }
+    public function createIntent(int $userId,float $amount,string $provider='paystack'):array
+    {$amount=round($amount,4);if($amount<=0||$amount>100000000)throw new RuntimeException('Invalid payment amount.');$reference='DEP-'.strtoupper(bin2hex(random_bytes(10)));$stmt=Database::connection()->prepare("INSERT INTO payment_intents(user_id,provider,reference,amount,currency,status) VALUES(:uid,:provider,:reference,:amount,'NGN','pending')");$stmt->execute([':uid'=>$userId,':provider'=>$provider,':reference'=>$reference,':amount'=>$amount]);return ['reference'=>$reference,'amount'=>$amount,'currency'=>'NGN'];}
+    public function creditWallet(int $userId,float $amount,string $reference,string $description='Wallet deposit'):int
+    {$amount=round($amount,4);if($amount<=0||$amount>100000000)throw new RuntimeException('Invalid deposit amount.');$pdo=Database::connection();$pdo->beginTransaction();try{$existing=$pdo->prepare('SELECT id FROM transactions WHERE reference=:reference LIMIT 1');$existing->execute([':reference'=>$reference]);$id=$existing->fetchColumn();if($id!==false){$pdo->commit();return (int)$id;}$u=$pdo->prepare('SELECT id,balance,status FROM users WHERE id=:id FOR UPDATE');$u->execute([':id'=>$userId]);$user=$u->fetch();if(!$user||$user['status']!=='active')throw new RuntimeException('User account is not active.');$before=(float)$user['balance'];$after=$before+$amount;$pdo->prepare('UPDATE users SET balance=:balance WHERE id=:id')->execute([':balance'=>$after,':id'=>$userId]);$pdo->prepare("INSERT INTO transactions(user_id,type,amount,balance_before,balance_after,reference,description,status) VALUES(:uid,'deposit',:amount,:before,:after,:ref,:desc,'completed')")->execute([':uid'=>$userId,':amount'=>$amount,':before'=>$before,':after'=>$after,':ref'=>$reference,':desc'=>mb_substr($description,0,255)]);$id=(int)$pdo->lastInsertId();$pdo->prepare('INSERT INTO wallet_ledger(user_id,transaction_id,direction,amount,balance_before,balance_after,reference,metadata) VALUES(:uid,:tx,\'credit\',:amount,:before,:after,:ref,:metadata)')->execute([':uid'=>$userId,':tx'=>$id,':amount'=>$amount,':before'=>$before,':after'=>$after,':ref'=>$reference,':metadata'=>json_encode(['description'=>$description],JSON_THROW_ON_ERROR)]);$pdo->commit();return $id;}catch(\Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}}
+    public function completeIntent(string $reference,string $providerReference,array $payload=[]):bool
+    {$pdo=Database::connection();$pdo->beginTransaction();try{$s=$pdo->prepare('SELECT * FROM payment_intents WHERE reference=:ref FOR UPDATE');$s->execute([':ref'=>$reference]);$intent=$s->fetch();if(!$intent)throw new RuntimeException('Payment reference not found.');if($intent['status']==='paid'){$pdo->rollBack();return false;}if($intent['status']!=='pending')throw new RuntimeException('Payment is not payable.');$pdo->prepare("UPDATE payment_intents SET status='paid',provider_reference=:pr,provider_raw=:raw,paid_at=NOW() WHERE id=:id")->execute([':pr'=>$providerReference,':raw'=>json_encode($payload,JSON_THROW_ON_ERROR),':id'=>$intent['id']]);$pdo->commit();$this->creditWallet((int)$intent['user_id'],(float)$intent['amount'],'PAY-'.$reference,'Verified '.$intent['provider'].' payment '.$providerReference);return true;}catch(\Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}}
 }
