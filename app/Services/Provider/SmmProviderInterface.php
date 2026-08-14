@@ -14,7 +14,17 @@ interface SmmProviderInterface
 
     public function getOrderStatus(string $providerOrderId): array;
 
+    public function getMultipleOrderStatuses(array $providerOrderIds): array;
+
     public function cancelOrder(string $providerOrderId): array;
 
+    public function cancelOrders(array $providerOrderIds): array;
+
     public function refillOrder(string $providerOrderId): array;
+
+    public function refillOrders(array $providerOrderIds): array;
+
+    public function getRefillStatus(string $refillId): array;
+
+    public function getMultipleRefillStatuses(array $refillIds): array;
 }
