@@ -32,9 +32,7 @@ final class OrderLifecycleService
                 throw new RuntimeException('Order not found.');
             }
 
-            $newStatus = $this->normalizeStatus(
-                (string) ($providerStatus['status'] ?? $order['status'])
-            );
+            $newStatus = $this->normalizeStatus((string) ($providerStatus['status'] ?? $order['status']));
             $oldStatus = $this->normalizeStatus((string) $order['status']);
             $startCount = isset($providerStatus['start_count'])
                 ? (int) $providerStatus['start_count']
@@ -43,7 +41,6 @@ final class OrderLifecycleService
                 ? (int) $providerStatus['remains']
                 : ($order['remains'] !== null ? (int) $order['remains'] : null);
 
-            $terminal = ['completed', 'partial', 'cancelled', 'failed'];
             $shouldProcessRefund = in_array($newStatus, ['partial', 'cancelled', 'failed'], true)
                 && $oldStatus !== $newStatus;
 
@@ -51,9 +48,6 @@ final class OrderLifecycleService
                 ? $this->calculateRefund($pdo, $order, $newStatus, $remains)
                 : 0.0;
 
-            // Commit the provider snapshot first only when no refund is required.
-            // RefundService uses its own transaction and must run before the order
-            // becomes terminal so a failed refund leaves the order retryable.
             if ($refundAmount > 0) {
                 $pdo->commit();
 
@@ -80,7 +74,9 @@ final class OrderLifecycleService
                      start_count = :start_count,
                      remains = :remains,
                      profit = :profit,
-                     provider_raw = :raw
+                     provider_raw = :raw,
+                     last_synced_at = NOW(),
+                     status_updated_at = CASE WHEN status <> :status_compare THEN NOW() ELSE status_updated_at END
                  WHERE id = :id'
             );
             $up->execute([
@@ -89,7 +85,22 @@ final class OrderLifecycleService
                 ':remains' => $remains,
                 ':profit' => $profit,
                 ':raw' => json_encode($providerStatus, JSON_THROW_ON_ERROR),
+                ':status_compare' => $newStatus,
                 ':id' => $orderId,
+            ]);
+
+            $pdo->prepare(
+                'INSERT INTO order_status_history
+                    (order_id, status, start_count, remains, provider_raw, source)
+                 VALUES
+                    (:order_id, :status, :start_count, :remains, :provider_raw, :source)'
+            )->execute([
+                ':order_id' => $orderId,
+                ':status' => $newStatus,
+                ':start_count' => $startCount,
+                ':remains' => $remains,
+                ':provider_raw' => json_encode($providerStatus, JSON_THROW_ON_ERROR),
+                ':source' => 'provider_sync',
             ]);
 
             $pdo->prepare(
