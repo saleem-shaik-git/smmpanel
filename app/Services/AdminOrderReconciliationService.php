@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Database;
-use App\Services\Provider\MarketerumProvider;
 use App\Services\Provider\ProviderFactory;
 use RuntimeException;
 
@@ -22,14 +21,14 @@ final class AdminOrderReconciliationService
                    AND status NOT IN ('completed','complete','cancelled','canceled','failed')"
             )->fetchColumn(),
             'retry_backlog' => (int) $pdo->query(
-                "SELECT COUNT(*) FROM order_sync_retries"
+                'SELECT COUNT(*) FROM order_sync_retries'
             )->fetchColumn(),
             'retry_due' => (int) $pdo->query(
                 "SELECT COUNT(*) FROM order_sync_retries
                  WHERE next_attempt_at IS NULL OR next_attempt_at <= NOW()"
             )->fetchColumn(),
             'retry_exhausted' => (int) $pdo->query(
-                "SELECT COUNT(*) FROM order_sync_retries WHERE attempts >= 6"
+                'SELECT COUNT(*) FROM order_sync_retries WHERE attempts >= 6'
             )->fetchColumn(),
             'failed_jobs_24h' => (int) $pdo->query(
                 "SELECT COUNT(*) FROM job_runs
@@ -185,16 +184,37 @@ final class AdminOrderReconciliationService
         ];
     }
 
-    public static function applyReconciliation(int $orderId): array
+    public static function applyReconciliation(int $orderId, int $adminId): array
     {
-        $result = self::reconcile($orderId);
+        $before = self::reconcile($orderId);
         $provider = ProviderFactory::marketerum();
+
         (new OrderLifecycleService($provider))->reconcileProviderStatus(
             $orderId,
-            $result['provider']
+            $before['provider']
         );
 
-        return self::reconcile($orderId);
+        $after = self::reconcile($orderId);
+        $pdo = Database::connection();
+        $stmt = $pdo->prepare(
+            "INSERT INTO order_audit_logs
+                (order_id, actor_type, action, old_status, new_status, metadata)
+             VALUES
+                (:order_id, 'admin', 'manual_reconciliation', :old_status, :new_status, :metadata)"
+        );
+        $stmt->execute([
+            ':order_id' => $orderId,
+            ':old_status' => $before['local_status'],
+            ':new_status' => $after['local_status'],
+            ':metadata' => json_encode([
+                'admin_id' => $adminId,
+                'provider_status' => $after['provider_status'],
+                'mismatch_before' => $before['mismatch'],
+                'mismatch_after' => $after['mismatch'],
+            ], JSON_THROW_ON_ERROR),
+        ]);
+
+        return $after;
     }
 
     private static function normalizeStatus(string $status): string
