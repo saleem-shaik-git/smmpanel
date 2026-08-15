@@ -17,15 +17,16 @@ final class MarketerumServiceSync
         $remote = $this->provider->getServices();
         $pdo = Database::connection();
         $defaultMarkup = max(0, (float) env('DEFAULT_MARKUP_PERCENT', 40));
+        $providerCurrency = strtoupper((string) env('MARKETERUM_CURRENCY', 'USD'));
+        $customerCurrency = strtoupper((string) env('CURRENCY', 'NGN'));
+        $fxRate = FxPricingService::providerToCustomerRate();
         $seen = [];
         $created = $updated = $disabled = $categories = 0;
 
         $pdo->beginTransaction();
         try {
             foreach ($remote as $item) {
-                if (!is_array($item) || !isset($item['service'], $item['name'])) {
-                    continue;
-                }
+                if (!is_array($item) || !isset($item['service'], $item['name'])) continue;
                 $providerId = (string) $item['service'];
                 $name = trim((string) $item['name']);
                 $categoryName = trim((string) ($item['category'] ?? 'Uncategorized')) ?: 'Uncategorized';
@@ -41,65 +42,48 @@ final class MarketerumServiceSync
                 $cat->execute([':slug' => $slug]);
                 $categoryId = $cat->fetchColumn();
                 if ($categoryId === false) {
-                    $pdo->prepare('INSERT INTO categories(name,slug,status) VALUES(:name,:slug,1)')
-                        ->execute([':name' => $categoryName, ':slug' => $slug]);
-                    $categoryId = (int) $pdo->lastInsertId();
-                    $categories++;
+                    $pdo->prepare('INSERT INTO categories(name,slug,status) VALUES(:name,:slug,1)')->execute([':name'=>$categoryName,':slug'=>$slug]);
+                    $categoryId = (int) $pdo->lastInsertId(); $categories++;
                 } else {
-                    $pdo->prepare('UPDATE categories SET name=:name,status=1 WHERE id=:id')
-                        ->execute([':name' => $categoryName, ':id' => $categoryId]);
+                    $pdo->prepare('UPDATE categories SET name=:name,status=1 WHERE id=:id')->execute([':name'=>$categoryName,':id'=>$categoryId]);
                     $categoryId = (int) $categoryId;
                 }
 
                 $find = $pdo->prepare('SELECT id,markup_percent FROM services WHERE provider=:provider AND provider_service_id=:provider_id LIMIT 1');
-                $find->execute([':provider' => 'marketerum', ':provider_id' => $providerId]);
+                $find->execute([':provider'=>'marketerum',':provider_id'=>$providerId]);
                 $existing = $find->fetch();
-                $markup = $existing && $existing['markup_percent'] !== null
-                    ? (float) $existing['markup_percent']
-                    : $defaultMarkup;
-                $selling = PricingService::sellingRate($providerRate, $markup);
+                $markup = $existing && $existing['markup_percent'] !== null ? (float)$existing['markup_percent'] : $defaultMarkup;
+                $selling = FxPricingService::sellingRate($providerRate, $markup);
 
+                $params = [
+                    ':category_id'=>$categoryId, ':name'=>$name, ':type'=>$type,
+                    ':provider_rate'=>$providerRate, ':provider_currency'=>$providerCurrency,
+                    ':customer_currency'=>$customerCurrency, ':fx_rate'=>$fxRate,
+                    ':selling_rate'=>$selling, ':markup'=>$markup, ':min'=>$min, ':max'=>$max,
+                    ':refill'=>$refill, ':cancel'=>$cancel, ':raw'=>json_encode($item, JSON_THROW_ON_ERROR)
+                ];
                 if ($existing) {
-                    $pdo->prepare('UPDATE services SET category_id=:category_id,name=:name,provider_type=:type,provider_rate=:provider_rate,selling_rate=:selling_rate,markup_percent=:markup,min_quantity=:min,max_quantity=:max,refill=:refill,cancel=:cancel,status=1,provider_raw=:raw WHERE id=:id')
-                        ->execute([
-                            ':category_id'=>$categoryId, ':name'=>$name, ':type'=>$type,
-                            ':provider_rate'=>$providerRate, ':selling_rate'=>$selling, ':markup'=>$markup,
-                            ':min'=>$min, ':max'=>$max, ':refill'=>$refill, ':cancel'=>$cancel,
-                            ':raw'=>json_encode($item, JSON_THROW_ON_ERROR), ':id'=>(int)$existing['id'],
-                        ]);
+                    $pdo->prepare('UPDATE services SET category_id=:category_id,name=:name,provider_type=:type,provider_rate=:provider_rate,provider_currency=:provider_currency,customer_currency=:customer_currency,fx_rate=:fx_rate,selling_rate=:selling_rate,markup_percent=:markup,min_quantity=:min,max_quantity=:max,refill=:refill,cancel=:cancel,status=1,provider_raw=:raw WHERE id=:id')
+                        ->execute($params + [':id'=>(int)$existing['id']]);
                     $updated++;
                 } else {
-                    $pdo->prepare('INSERT INTO services(category_id,provider,provider_service_id,name,provider_type,provider_rate,selling_rate,markup_percent,min_quantity,max_quantity,refill,cancel,status,provider_raw) VALUES(:category_id,\'marketerum\',:provider_id,:name,:type,:provider_rate,:selling_rate,:markup,:min,:max,:refill,:cancel,1,:raw)')
-                        ->execute([
-                            ':category_id'=>$categoryId, ':provider_id'=>$providerId, ':name'=>$name,
-                            ':type'=>$type, ':provider_rate'=>$providerRate, ':selling_rate'=>$selling,
-                            ':markup'=>$markup, ':min'=>$min, ':max'=>$max, ':refill'=>$refill,
-                            ':cancel'=>$cancel, ':raw'=>json_encode($item, JSON_THROW_ON_ERROR),
-                        ]);
+                    $pdo->prepare("INSERT INTO services(category_id,provider,provider_service_id,name,provider_type,provider_rate,provider_currency,selling_rate,customer_currency,fx_rate,markup_percent,min_quantity,max_quantity,refill,cancel,status,provider_raw) VALUES(:category_id,'marketerum',:provider_id,:name,:type,:provider_rate,:provider_currency,:selling_rate,:customer_currency,:fx_rate,:markup,:min,:max,:refill,:cancel,1,:raw)")
+                        ->execute($params + [':provider_id'=>$providerId]);
                     $created++;
                 }
                 $seen[$providerId] = true;
             }
-
-            if ($seen === []) {
-                throw new RuntimeException('Marketerum returned no valid services; existing services were not disabled.');
-            }
-            $placeholders = implode(',', array_fill(0, count($seen), '?'));
-            $stmt = $pdo->prepare("UPDATE services SET status=0 WHERE provider='marketerum' AND provider_service_id NOT IN ($placeholders) AND status=1");
-            $stmt->execute(array_keys($seen));
-            $disabled = $stmt->rowCount();
-            $pdo->commit();
-        } catch (\Throwable $e) {
-            if ($pdo->inTransaction()) $pdo->rollBack();
-            throw $e;
-        }
-
-        return compact('created', 'updated', 'disabled', 'categories') + ['total' => count($seen)];
+            if ($seen === []) throw new RuntimeException('Marketerum returned no valid services; existing services were not disabled.');
+            $placeholders = implode(',', array_fill(0,count($seen),'?'));
+            $stmt=$pdo->prepare("UPDATE services SET status=0 WHERE provider='marketerum' AND provider_service_id NOT IN ($placeholders) AND status=1");
+            $stmt->execute(array_keys($seen)); $disabled=$stmt->rowCount(); $pdo->commit();
+        } catch (\Throwable $e) { if($pdo->inTransaction())$pdo->rollBack(); throw $e; }
+        return compact('created','updated','disabled','categories') + ['total'=>count($seen),'fx_rate'=>$fxRate,'provider_currency'=>$providerCurrency,'customer_currency'=>$customerCurrency];
     }
 
     private function slug(string $value): string
     {
-        $slug = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', $value), '-'));
+        $slug = strtolower(trim(preg_replace('/[^a-z0-9]+/i','-',$value),'-'));
         return $slug !== '' ? $slug : 'uncategorized';
     }
 }
