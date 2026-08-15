@@ -41,4 +41,15 @@ final class AdminService
         $stmt=Database::connection()->prepare('UPDATE services SET selling_rate=:rate, markup_percent=:markup WHERE id=:id');
         $stmt->execute([':rate'=>$sellingRate, ':markup'=>$markupPercent, ':id'=>$serviceId]);
     }
+
+    public static function setServiceStatus(int $serviceId, bool $active): void
+    {
+        $stmt = Database::connection()->prepare("UPDATE services SET status=:status WHERE id=:id");
+        $stmt->execute([':status'=>$active ? 1 : 0, ':id'=>$serviceId]);
+        if ($stmt->rowCount() === 0) {
+            $exists = Database::connection()->prepare('SELECT id FROM services WHERE id=:id');
+            $exists->execute([':id'=>$serviceId]);
+            if ($exists->fetchColumn() === false) throw new RuntimeException('Service not found.');
+        }
+    }
 }
