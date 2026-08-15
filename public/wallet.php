@@ -4,4 +4,33 @@ declare(strict_types=1);
 require dirname(__DIR__).'/config/bootstrap.php';
 use App\Auth;use App\Database;
 $userId=Auth::requireLogin();$pdo=Database::connection();$s=$pdo->prepare('SELECT name,email,balance FROM users WHERE id=:id');$s->execute([':id'=>$userId]);$user=$s->fetch();$t=$pdo->prepare("SELECT amount,reference,status,description,created_at FROM transactions WHERE user_id=:id AND type='deposit' ORDER BY id DESC LIMIT 20");$t->execute([':id'=>$userId]);$transactions=$t->fetchAll();
-?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fund Wallet | SMM Panel</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-dark bg-dark"><div class="container"><a class="navbar-brand" href="/dashboard.php">SMM Panel</a><a class="btn btn-outline-light btn-sm" href="/logout.php">Dashboard</a></div></nav><main class="container py-4"><div class="row g-4"><div class="col-lg-5"><div class="card border-0 shadow-sm"><div class="card-body"><h3>Fund Wallet</h3><p class="text-muted">Current balance</p><h2>₦<?=number_format((float)$user['balance'],2)?></h2><form method="post" action="/payments/initialize.php" class="mt-4"><label class="form-label">Amount (NGN)</label><input class="form-control form-control-lg" type="number" name="amount" min="100" max="100000000" step="0.01" required><div class="form-text">Minimum deposit: ₦100.</div><button class="btn btn-primary w-100 mt-3">Continue to Paystack</button></form></div></div></div><div class="col-lg-7"><div class="card border-0 shadow-sm"><div class="card-header bg-white"><strong>Deposit history</strong></div><div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Reference</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody><?php foreach($transactions as $row):?><tr><td><code><?=htmlspecialchars($row['reference'])?></code></td><td>₦<?=number_format((float)$row['amount'],2)?></td><td><span class="badge text-bg-success"><?=htmlspecialchars($row['status'])?></span></td><td><?=htmlspecialchars($row['created_at'])?></td></tr><?php endforeach;?></tbody></table></div></div></div></div></main></body></html>
+?><!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fund Wallet | SMM Panel</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><nav class="navbar navbar-dark bg-dark"><div class="container"><a class="navbar-brand" href="/dashboard.php">SMM Panel</a><a class="btn btn-outline-light btn-sm" href="/logout.php">Dashboard</a></div></nav><main class="container py-4"><div class="row g-4"><div class="col-lg-5"><div class="card border-0 shadow-sm"><div class="card-body"><h3>Fund Wallet</h3><p class="text-muted">Current balance</p><h2>₦<?=number_format((float)$user['balance'],2)?></h2><form method="post" action="/add-funds.php" class="mt-4">
+    <input
+        type="hidden"
+        name="_csrf"
+        value="<?= htmlspecialchars(Auth::csrfToken()) ?>"
+    >
+
+    <label class="form-label">Amount (NGN)</label>
+
+    <input
+        class="form-control form-control-lg"
+        type="number"
+        name="amount"
+        min="100"
+        max="10000000"
+        step="0.01"
+        required
+    >
+
+    <div class="form-text">
+        Minimum deposit: ₦100.
+    </div>
+
+    <button
+        type="submit"
+        class="btn btn-primary w-100 mt-3"
+    >
+        Continue to Paystack
+    </button>
+</form></div></div></div><div class="col-lg-7"><div class="card border-0 shadow-sm"><div class="card-header bg-white"><strong>Deposit history</strong></div><div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Reference</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody><?php foreach($transactions as $row):?><tr><td><code><?=htmlspecialchars($row['reference'])?></code></td><td>₦<?=number_format((float)$row['amount'],2)?></td><td><span class="badge text-bg-success"><?=htmlspecialchars($row['status'])?></span></td><td><?=htmlspecialchars($row['created_at'])?></td></tr><?php endforeach;?></tbody></table></div></div></div></div></main></body></html>
