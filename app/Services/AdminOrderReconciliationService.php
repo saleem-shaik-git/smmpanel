@@ -105,6 +105,9 @@ final class AdminOrderReconciliationService
         $after = self::reconcile($orderId);
 
         $pdo = Database::connection();
+        $retry = $pdo->prepare('DELETE FROM order_sync_retries WHERE order_id = :order_id');
+        $retry->execute([':order_id' => $orderId]);
+
         $stmt = $pdo->prepare("INSERT INTO order_audit_logs (order_id, actor_type, action, old_status, new_status, metadata) VALUES (:order_id, 'admin', 'manual_reconciliation', :old_status, :new_status, :metadata)");
         $stmt->execute([
             ':order_id' => $orderId,
